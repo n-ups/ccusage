@@ -1,9 +1,12 @@
+import type { HeadroomBalance } from '../_headroom-parser.ts';
 import type { CostMode } from '../_types.ts';
 import type { UsageData } from '../data-loader.ts';
 import process from 'node:process';
 import { formatCurrency, formatNumber, ResponsiveTable } from '@ccusage/terminal/table';
 import { Result } from '@praha/byethrow';
+import pc from 'picocolors';
 import { formatDateCompact } from '../_date-utils.ts';
+import { calculateHeadroomBalance, getHeadroomStats } from '../_headroom-parser.ts';
 import { processWithJq } from '../_jq-processor.ts';
 import { loadSessionUsageById } from '../data-loader.ts';
 import { log, logger } from '../logger.ts';
@@ -16,6 +19,7 @@ export type SessionIdContext = {
 		jq?: string;
 		timezone?: string;
 		locale: string; // normalized to non-optional to avoid touching data-loader
+		headroom?: boolean;
 	};
 };
 
@@ -40,8 +44,18 @@ export async function handleSessionIdLookup(
 		process.exit(0);
 	}
 
+	let headroomBalance: HeadroomBalance | undefined;
+	if (ctx.values.headroom === true) {
+		const headroomResult = await getHeadroomStats();
+		if (Result.isSuccess(headroomResult)) {
+			headroomBalance = calculateHeadroomBalance(headroomResult.value);
+		} else if (headroomResult.error.message !== 'HEADROOM_NOT_FOUND') {
+			logger.warn(`Failed to fetch headroom stats: ${headroomResult.error.message}`);
+		}
+	}
+
 	if (useJson) {
-		const jsonOutput = {
+		const jsonOutput: any = {
 			sessionId: ctx.values.id,
 			totalCost: sessionUsage.totalCost,
 			totalTokens: calculateSessionTotalTokens(sessionUsage.entries),
@@ -55,6 +69,13 @@ export async function handleSessionIdLookup(
 				costUSD: entry.costUSD ?? 0,
 			})),
 		};
+
+		if (headroomBalance != null) {
+			Object.assign(jsonOutput, {
+				headroom: headroomBalance,
+				grandTotalPaid: sessionUsage.totalCost + headroomBalance.totalPaid,
+			});
+		}
 
 		if (ctx.values.jq != null) {
 			const jqResult = await processWithJq(jsonOutput, ctx.values.jq);
@@ -71,9 +92,33 @@ export async function handleSessionIdLookup(
 
 		const totalTokens = calculateSessionTotalTokens(sessionUsage.entries);
 
-		log(`Total Cost: ${formatCurrency(sessionUsage.totalCost)}`);
 		log(`Total Tokens: ${formatNumber(totalTokens)}`);
 		log(`Total Entries: ${sessionUsage.entries.length}`);
+
+		if (headroomBalance != null) {
+			const pctSaved =
+				headroomBalance.usageCost > 0
+					? (headroomBalance.savings / headroomBalance.usageCost) * 100
+					: 0;
+
+			log(`\n${pc.cyan('--- Headroom Proxy Impact ---')}`);
+			log(`Headroom Usage:   ${pc.red(`+${formatCurrency(headroomBalance.usageCost)}`)}`);
+			log(
+				`Headroom Savings: ${pc.green(`-${formatCurrency(headroomBalance.savings)}`)} (${pctSaved.toFixed(1)}%)`,
+			);
+			log(`Headroom Paid:    ${pc.yellow(`+${formatCurrency(headroomBalance.totalPaid)}`)}`);
+
+			log(`\n${pc.cyan('--- Combined Total ---')}`);
+			log(`Claude Code Paid: ${formatCurrency(sessionUsage.totalCost)}`);
+			log(`Headroom Paid:    ${pc.yellow(`+${formatCurrency(headroomBalance.totalPaid)}`)}`);
+			log(`--------------------------------`);
+			log(
+				`Grand Total Paid: ${pc.yellow(formatCurrency(sessionUsage.totalCost + headroomBalance.totalPaid))}`,
+			);
+		} else {
+			log(`Total Cost: ${formatCurrency(sessionUsage.totalCost)}`);
+		}
+
 		log('');
 
 		if (sessionUsage.entries.length > 0) {

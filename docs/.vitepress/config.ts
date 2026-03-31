@@ -107,6 +107,7 @@ export default defineConfig({
 						{ text: 'MCP Server', link: '/guide/mcp-server' },
 						{ text: 'JSON Output', link: '/guide/json-output' },
 						{ text: 'Statusline Integration', link: '/guide/statusline' },
+						{ text: 'Headroom Integration', link: '/guide/headroom' },
 					],
 				},
 				{

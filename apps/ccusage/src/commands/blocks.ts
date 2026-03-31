@@ -1,3 +1,4 @@
+import type { HeadroomBalance } from '../_headroom-parser.ts';
 import type { SessionBlock } from '../_session-blocks.ts';
 import process from 'node:process';
 import {
@@ -16,6 +17,7 @@ import {
 	BLOCKS_WARNING_THRESHOLD,
 	DEFAULT_RECENT_DAYS,
 } from '../_consts.ts';
+import { calculateHeadroomBalance, getHeadroomStats } from '../_headroom-parser.ts';
 import { processWithJq } from '../_jq-processor.ts';
 import {
 	calculateBurnRate,
@@ -221,6 +223,16 @@ export const blocksCommand = define({
 			}
 		}
 
+		let headroomBalance: HeadroomBalance | undefined;
+		if (ctx.values.headroom === true) {
+			const headroomResult = await getHeadroomStats();
+			if (Result.isSuccess(headroomResult)) {
+				headroomBalance = calculateHeadroomBalance(headroomResult.value);
+			} else if (headroomResult.error.message !== 'HEADROOM_NOT_FOUND') {
+				logger.warn(`Failed to fetch headroom stats: ${headroomResult.error.message}`);
+			}
+		}
+
 		if (useJson) {
 			// JSON output
 			const jsonOutput = {
@@ -264,7 +276,15 @@ export const blocksCommand = define({
 						usageLimitResetTime: block.usageLimitResetTime,
 					};
 				}),
+				...(headroomBalance != null ? { headroom: headroomBalance } : {}),
 			};
+
+			if (headroomBalance != null) {
+				const totalCost = blocks.reduce((acc, block) => acc + block.costUSD, 0);
+				Object.assign(jsonOutput, {
+					grandTotalPaid: totalCost + headroomBalance.totalPaid,
+				});
+			}
 
 			// Process with jq if specified
 			if (ctx.values.jq != null) {
@@ -459,7 +479,7 @@ export const blocksCommand = define({
 								if (actualTokenLimit != null && actualTokenLimit > 0) {
 									const percentage = (projection.totalTokens / actualTokenLimit) * 100;
 									const percentText = `${percentage.toFixed(1)}%`;
-									projectedRow.push(percentText);
+									projectedRow.push(percentage > 100 ? pc.red(percentText) : percentText);
 								}
 
 								projectedRow.push(formatCurrency(projection.totalCost));
@@ -471,6 +491,28 @@ export const blocksCommand = define({
 
 				log(table.toString());
 			}
+		}
+
+		if (headroomBalance != null) {
+			const pctSaved =
+				headroomBalance.usageCost > 0
+					? (headroomBalance.savings / headroomBalance.usageCost) * 100
+					: 0;
+
+			const totalCost = blocks.reduce((acc, block) => acc + block.costUSD, 0);
+
+			log(`\n${pc.cyan('--- Headroom Proxy Impact ---')}`);
+			log(`Headroom Usage:   ${pc.red(`+${formatCurrency(headroomBalance.usageCost)}`)}`);
+			log(
+				`Headroom Savings: ${pc.green(`-${formatCurrency(headroomBalance.savings)}`)} (${pctSaved.toFixed(1)}%)`,
+			);
+			log(`Headroom Paid:    ${pc.yellow(`+${formatCurrency(headroomBalance.totalPaid)}`)}`);
+
+			log(`\n${pc.cyan('--- Combined Total ---')}`);
+			log(`Claude Code Paid: ${formatCurrency(totalCost)}`);
+			log(`Headroom Paid:    ${pc.yellow(`+${formatCurrency(headroomBalance.totalPaid)}`)}`);
+			log(`--------------------------------`);
+			log(`Grand Total Paid: ${pc.yellow(formatCurrency(totalCost + headroomBalance.totalPaid))}`);
 		}
 	},
 });

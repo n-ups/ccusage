@@ -110,6 +110,12 @@ export const sharedArgs = {
 		description: 'Force compact mode for narrow displays (better for screenshots)',
 		default: false,
 	},
+	headroom: {
+		type: 'boolean',
+		negatable: true,
+		description: 'Include overhead and cost savings calculated from headroom perf',
+		default: true,
+	},
 } as const satisfies Args;
 
 /**

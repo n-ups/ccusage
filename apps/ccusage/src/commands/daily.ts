@@ -1,8 +1,10 @@
 import type { UsageReportConfig } from '@ccusage/terminal/table';
+import type { HeadroomBalance } from '../_headroom-parser.ts';
 import process from 'node:process';
 import {
 	addEmptySeparatorRow,
 	createUsageReportTable,
+	formatCurrency,
 	formatTotalsRow,
 	formatUsageDataRow,
 	pushBreakdownRows,
@@ -13,6 +15,7 @@ import pc from 'picocolors';
 import { loadConfig, mergeConfigWithArgs } from '../_config-loader-tokens.ts';
 import { groupByProject, groupDataByProject } from '../_daily-grouping.ts';
 import { formatDateCompact } from '../_date-utils.ts';
+import { calculateHeadroomBalance, getHeadroomStats } from '../_headroom-parser.ts';
 import { processWithJq } from '../_jq-processor.ts';
 import { formatProjectName } from '../_project-names.ts';
 import { sharedCommandConfig } from '../_shared-args.ts';
@@ -92,6 +95,16 @@ export const dailyCommand = define({
 		// Calculate totals
 		const totals = calculateTotals(dailyData);
 
+		let headroomBalance: HeadroomBalance | undefined;
+		if (mergedOptions.headroom === true) {
+			const headroomResult = await getHeadroomStats();
+			if (Result.isSuccess(headroomResult)) {
+				headroomBalance = calculateHeadroomBalance(headroomResult.value);
+			} else if (headroomResult.error.message !== 'HEADROOM_NOT_FOUND') {
+				logger.warn(`Failed to fetch headroom stats: ${headroomResult.error.message}`);
+			}
+		}
+
 		// Show debug information if requested
 		if (mergedOptions.debug && !useJson) {
 			const mismatchStats = await detectMismatches(undefined);
@@ -105,6 +118,7 @@ export const dailyCommand = define({
 					? {
 							projects: groupByProject(dailyData),
 							totals: createTotalsObject(totals),
+							...(headroomBalance != null ? { headroom: headroomBalance } : {}),
 						}
 					: {
 							daily: dailyData.map((data) => ({
@@ -120,7 +134,14 @@ export const dailyCommand = define({
 								...(data.project != null && { project: data.project }),
 							})),
 							totals: createTotalsObject(totals),
+							...(headroomBalance != null ? { headroom: headroomBalance } : {}),
 						};
+
+			if (headroomBalance != null) {
+				Object.assign(jsonOutput, {
+					grandTotalPaid: totals.totalCost + headroomBalance.totalPaid,
+				});
+			}
 
 			// Process with jq if specified
 			if (mergedOptions.jq != null) {
@@ -226,6 +247,28 @@ export const dailyCommand = define({
 			table.push(totalsRow);
 
 			log(table.toString());
+
+			if (headroomBalance != null) {
+				const pctSaved =
+					headroomBalance.usageCost > 0
+						? (headroomBalance.savings / headroomBalance.usageCost) * 100
+						: 0;
+
+				log(`\n${pc.cyan('--- Headroom Proxy Impact ---')}`);
+				log(`Headroom Usage:   ${pc.red(`+${formatCurrency(headroomBalance.usageCost)}`)}`);
+				log(
+					`Headroom Savings: ${pc.green(`-${formatCurrency(headroomBalance.savings)}`)} (${pctSaved.toFixed(1)}%)`,
+				);
+				log(`Headroom Paid:    ${pc.yellow(`+${formatCurrency(headroomBalance.totalPaid)}`)}`);
+
+				log(`\n${pc.cyan('--- Combined Total ---')}`);
+				log(`Claude Code Paid: ${formatCurrency(totals.totalCost)}`);
+				log(`Headroom Paid:    ${pc.yellow(`+${formatCurrency(headroomBalance.totalPaid)}`)}`);
+				log(`--------------------------------`);
+				log(
+					`Grand Total Paid: ${pc.yellow(formatCurrency(totals.totalCost + headroomBalance.totalPaid))}`,
+				);
+			}
 
 			// Show guidance message if in compact mode
 			if (table.isCompactMode()) {

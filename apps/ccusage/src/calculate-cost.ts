@@ -8,8 +8,15 @@
  * @module calculate-cost
  */
 
+import type { HeadroomStats } from './_headroom-parser.ts';
 import type { AggregatedTokenCounts } from './_token-utils.ts';
-import type { DailyUsage, MonthlyUsage, SessionUsage, WeeklyUsage } from './data-loader.ts';
+import type {
+	DailyUsage,
+	ModelBreakdown,
+	MonthlyUsage,
+	SessionUsage,
+	WeeklyUsage,
+} from './data-loader.ts';
 import { getTotalTokens } from './_token-utils.ts';
 import {
 	createActivityDate,
@@ -79,6 +86,27 @@ export function createTotalsObject(totals: TokenTotals): TotalsObject {
 		...totals,
 		totalTokens: getTotalTokens(totals),
 	};
+}
+
+/**
+ * Calculates the total headroom savings in USD from the given model breakdowns.
+ * @param breakdowns - Array of model breakdowns containing cost data
+ * @param headroomStats - Headroom usage stats parsed from CLI
+ * @returns Total savings amount in USD
+ */
+export function calculateHeadroomSavings(
+	breakdowns: ModelBreakdown[],
+	headroomStats: HeadroomStats,
+): number {
+	let savedUsd = 0;
+	for (const breakdown of breakdowns) {
+		const modelNameStr = breakdown.modelName.toString();
+		const stats = headroomStats.models[modelNameStr];
+		if (stats != null) {
+			savedUsd += breakdown.cost * stats.savedPct;
+		}
+	}
+	return savedUsd;
 }
 
 if (import.meta.vitest != null) {
